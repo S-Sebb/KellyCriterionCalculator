@@ -104,10 +104,7 @@ class KellyCalculatorWindow(QMainWindow):
         input_layout.addWidget(QLabel("Bankroll"), 2, 0)
         input_layout.addWidget(self.bankroll_input, 2, 1)
         input_layout.addWidget(
-            QLabel(
-                "Outcomes are generated from team names. Enter either all 3 probabilities (%) "
-                "or all 3 weights, then Calculate fills the other column."
-            ),
+            QLabel("Enter either all 3 Pred Probabilities (%) or all 3 Pred Weights"),
             3,
             0,
             1,
