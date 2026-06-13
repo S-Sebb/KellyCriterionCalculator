@@ -11,8 +11,8 @@ Desktop calculator for three-outcome Kelly Criterion betting, such as:
 - Calculates Full Kelly, Half Kelly, and 1/4 Kelly bet amounts.
 - Uses your bankroll, decimal odds, and predicted outcome chances.
 - Accepts either:
-  - three predicted probabilities adding to `100%`, or
-  - three prediction weights.
+  - three prediction weights/probabilities, or
+  - three estimated fair decimal odds.
 - Generates outcome names from the two team names.
 - Includes buttons to calculate, load an example, and clear the form.
 

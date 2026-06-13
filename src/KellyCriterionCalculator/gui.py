@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from KellyCriterionCalculator.kelly import scaled_kelly_fractions
+from KellyCriterionCalculator.kelly import full_kelly_market_fractions
 
 OUTCOME_COUNT = 3
 OUTCOME_COLUMN = 0
@@ -41,7 +41,7 @@ DEFAULT_TEAM_B = "Team B"
 DEFAULT_WEIGHTS = ("1", "2", "4")
 DEFAULT_ODDS = ("2.30", "3.40", "3.10")
 DEFAULT_BANKROLL = "1000.00"
-PROBABILITY_MATCH_TOLERANCE = 0.0001
+PROBABILITY_MATCH_TOLERANCE = 0.005
 
 
 @dataclass(frozen=True)
@@ -102,13 +102,6 @@ class KellyCalculatorWindow(QMainWindow):
         input_layout.addWidget(self.team_b_input, 1, 1)
         input_layout.addWidget(QLabel("Bankroll"), 2, 0)
         input_layout.addWidget(self.bankroll_input, 2, 1)
-        input_layout.addWidget(
-            QLabel("Enter all 3 EST. Win Weights or all 3 EST. Fair Odds"),
-            3,
-            0,
-            1,
-            2,
-        )
 
         self.table.setHorizontalHeaderLabels(
             [
@@ -142,7 +135,7 @@ class KellyCalculatorWindow(QMainWindow):
             weight_input.setPlaceholderText("Example: 2")
             weight_input.setValidator(positive_number_validator)
             payout_input = QLineEdit()
-            payout_input.setPlaceholderText("Example: 1.51")
+            payout_input.setPlaceholderText("Example: 2.50")
             payout_input.setValidator(positive_number_validator)
             odds_input = QLineEdit()
             odds_input.setValidator(positive_number_validator)
@@ -268,22 +261,24 @@ class KellyCalculatorWindow(QMainWindow):
         payout_complete = all(payout_texts)
 
         self._validate_complete_or_empty(weight_texts, weight_complete, "weight")
-        self._validate_complete_or_empty(payout_texts, payout_complete, "payout")
+        self._validate_complete_or_empty(payout_texts, payout_complete, "fair odds")
         if not weight_complete and not payout_complete:
-            raise ValueError("Enter all 3 weights or all 3 predicted payouts.")
+            raise ValueError("Enter all 3 weights or all 3 estimated fair odds.")
 
         if weight_complete:
             probabilities = normalize_weights(self._parse_weight_inputs(labels))
         else:
-            probabilities = normalize_payouts(self._parse_payout_inputs(labels))
+            probabilities = fair_odds_to_probabilities(
+                self._parse_payout_inputs(labels)
+            )
 
         if weight_complete and payout_complete:
-            probabilities_from_payouts = normalize_payouts(
+            probabilities_from_payouts = fair_odds_to_probabilities(
                 self._parse_payout_inputs(labels)
             )
             if not probabilities_match(probabilities, probabilities_from_payouts):
                 raise ValueError(
-                    "Predicted weight and payout columns disagree. "
+                    "Predicted weight and fair odds columns disagree. "
                     "Clear one column, then Calculate again."
                 )
 
@@ -316,7 +311,7 @@ class KellyCalculatorWindow(QMainWindow):
 
     def _parse_payout_inputs(self, labels: tuple[str, str, str]) -> list[float]:
         return [
-            parse_predicted_payout(self.payout_inputs[row].text(), f"{label} payout")
+            parse_fair_odds(self.payout_inputs[row].text(), f"{label} fair odds")
             for row, label in enumerate(labels)
         ]
 
@@ -361,14 +356,14 @@ class KellyCalculatorWindow(QMainWindow):
 
 
 def calculate_outcomes(inputs: list[OutcomeInput]) -> list[OutcomeResult]:
-    """Calculate Kelly fractions for each outcome."""
-    results: list[OutcomeResult] = []
-    for item in inputs:
-        full, half, quarter = scaled_kelly_fractions(
-            item.probability, item.decimal_odds
-        )
-        results.append(OutcomeResult(item.label, item.probability, full, half, quarter))
-    return results
+    """Calculate Kelly fractions for one mutually-exclusive outcome market."""
+    probabilities = [item.probability for item in inputs]
+    decimal_odds = [item.decimal_odds for item in inputs]
+    full_fractions = full_kelly_market_fractions(probabilities, decimal_odds)
+    return [
+        OutcomeResult(item.label, item.probability, full, full / 2, full / 4)
+        for item, full in zip(inputs, full_fractions, strict=True)
+    ]
 
 
 def parse_weight(raw_value: str, field_name: str) -> float:
@@ -395,8 +390,8 @@ def normalize_weights(weights: list[float]) -> list[float]:
     return [weight / total for weight in weights]
 
 
-def parse_predicted_payout(raw_value: str, field_name: str) -> float:
-    """Parse positive predicted payout."""
+def parse_fair_odds(raw_value: str, field_name: str) -> float:
+    """Parse estimated fair decimal odds."""
     text = raw_value.strip()
     if not text:
         raise ValueError(f"{field_name} is required.")
@@ -406,21 +401,21 @@ def parse_predicted_payout(raw_value: str, field_name: str) -> float:
     except ValueError as exc:
         raise ValueError(f"{field_name} must be a number.") from exc
 
-    if value <= 0:
-        raise ValueError(f"{field_name} must be greater than 0.")
+    if value <= 1:
+        raise ValueError(f"{field_name} must be greater than 1.")
     return value
 
 
-def normalize_payouts(payouts: list[float]) -> list[float]:
-    """Convert inverse-proportional payouts into probabilities."""
-    return normalize_weights([1 / payout for payout in payouts])
+def fair_odds_to_probabilities(fair_odds: list[float]) -> list[float]:
+    """Convert estimated fair decimal odds into normalized probabilities."""
+    return normalize_weights([1 / odds for odds in fair_odds])
 
 
 def probabilities_to_payouts(probabilities: list[float]) -> list[float]:
-    """Convert probabilities into inverse-proportional predicted payouts."""
+    """Convert probabilities into estimated fair decimal odds."""
     if any(probability <= 0 for probability in probabilities):
         raise ValueError(
-            "Predicted payouts cannot be calculated from zero probabilities."
+            "Estimated fair odds cannot be calculated from zero probabilities."
         )
     return [1 / probability for probability in probabilities]
 
@@ -476,7 +471,7 @@ def format_weight(value: float) -> str:
 
 
 def format_payout(value: float) -> str:
-    """Format generated payout text."""
+    """Format generated fair odds text."""
     return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
