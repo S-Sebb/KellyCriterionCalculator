@@ -29,8 +29,8 @@ from KellyCriterionCalculator.kelly import scaled_kelly_fractions
 
 OUTCOME_COUNT = 3
 OUTCOME_COLUMN = 0
-PROBABILITY_COLUMN = 1
-WEIGHT_COLUMN = 2
+WEIGHT_COLUMN = 1
+PAYOUT_COLUMN = 2
 ODDS_COLUMN = 3
 FULL_KELLY_COLUMN = 4
 HALF_KELLY_COLUMN = 5
@@ -41,7 +41,6 @@ DEFAULT_TEAM_B = "Team B"
 DEFAULT_WEIGHTS = ("1", "2", "4")
 DEFAULT_ODDS = ("2.30", "3.40", "3.10")
 DEFAULT_BANKROLL = "1000.00"
-PROBABILITY_SUM_TOLERANCE = 0.05
 PROBABILITY_MATCH_TOLERANCE = 0.0001
 
 
@@ -82,8 +81,8 @@ class KellyCalculatorWindow(QMainWindow):
 
         self.table = QTableWidget(OUTCOME_COUNT, 7)
         self.outcome_items: list[QTableWidgetItem] = []
-        self.probability_inputs: list[QLineEdit] = []
         self.weight_inputs: list[QLineEdit] = []
+        self.payout_inputs: list[QLineEdit] = []
         self.odds_inputs: list[QLineEdit] = []
         self.summary = QTextEdit()
         self.summary.setReadOnly(True)
@@ -104,7 +103,7 @@ class KellyCalculatorWindow(QMainWindow):
         input_layout.addWidget(QLabel("Bankroll"), 2, 0)
         input_layout.addWidget(self.bankroll_input, 2, 1)
         input_layout.addWidget(
-            QLabel("Enter either all 3 Pred Probabilities (%) or all 3 Pred Weights"),
+            QLabel("Enter all 3 EST. Win Weights or all 3 EST. Fair Odds"),
             3,
             0,
             1,
@@ -114,9 +113,9 @@ class KellyCalculatorWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(
             [
                 "Outcome",
-                "Pred Probability (%)",
-                "Pred Weight",
-                "Decimal Odds",
+                "EST. Win Weight",
+                "EST. Fair Odds",
+                "Bookmaker Odds",
                 "Full Kelly",
                 "Half Kelly",
                 "1/4 Kelly",
@@ -139,25 +138,26 @@ class KellyCalculatorWindow(QMainWindow):
         for row in range(OUTCOME_COUNT):
             outcome_item = QTableWidgetItem("—")
             outcome_item.setFlags(outcome_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            probability_input = QLineEdit()
-            probability_input.setPlaceholderText("Example: 25%")
             weight_input = QLineEdit()
             weight_input.setPlaceholderText("Example: 2")
             weight_input.setValidator(positive_number_validator)
+            payout_input = QLineEdit()
+            payout_input.setPlaceholderText("Example: 1.51")
+            payout_input.setValidator(positive_number_validator)
             odds_input = QLineEdit()
             odds_input.setValidator(positive_number_validator)
 
-            probability_input.textEdited.connect(self.clear_weight_inputs)
-            weight_input.textEdited.connect(self.clear_probability_inputs)
+            weight_input.textEdited.connect(self.clear_payout_inputs)
+            payout_input.textEdited.connect(self.clear_weight_inputs)
 
             self.outcome_items.append(outcome_item)
-            self.probability_inputs.append(probability_input)
             self.weight_inputs.append(weight_input)
+            self.payout_inputs.append(payout_input)
             self.odds_inputs.append(odds_input)
 
             self.table.setItem(row, OUTCOME_COLUMN, outcome_item)
-            self.table.setCellWidget(row, PROBABILITY_COLUMN, probability_input)
             self.table.setCellWidget(row, WEIGHT_COLUMN, weight_input)
+            self.table.setCellWidget(row, PAYOUT_COLUMN, payout_input)
             self.table.setCellWidget(row, ODDS_COLUMN, odds_input)
 
             for column in (FULL_KELLY_COLUMN, HALF_KELLY_COLUMN, QUARTER_KELLY_COLUMN):
@@ -194,8 +194,8 @@ class KellyCalculatorWindow(QMainWindow):
         for row, (weight, odds) in enumerate(
             zip(DEFAULT_WEIGHTS, DEFAULT_ODDS, strict=True)
         ):
-            self.probability_inputs[row].clear()
             self.weight_inputs[row].setText(weight)
+            self.payout_inputs[row].clear()
             self.odds_inputs[row].setText(odds)
         self.update_outcomes()
         self.calculate()
@@ -206,20 +206,20 @@ class KellyCalculatorWindow(QMainWindow):
         self.team_b_input.clear()
         self.bankroll_input.clear()
         for row in range(OUTCOME_COUNT):
-            self.probability_inputs[row].clear()
             self.weight_inputs[row].clear()
+            self.payout_inputs[row].clear()
             self.odds_inputs[row].clear()
             self._set_output(row, "—", "—", "—")
         self.update_outcomes()
         self.summary.clear()
 
-    def clear_probability_inputs(self) -> None:
-        """Clear probabilities when user starts entering weights."""
-        for probability_input in self.probability_inputs:
-            probability_input.clear()
+    def clear_payout_inputs(self) -> None:
+        """Clear payouts when user starts entering weights."""
+        for payout_input in self.payout_inputs:
+            payout_input.clear()
 
     def clear_weight_inputs(self) -> None:
-        """Clear weights when user starts entering probabilities."""
+        """Clear weights when user starts entering payouts."""
         for weight_input in self.weight_inputs:
             weight_input.clear()
 
@@ -262,37 +262,35 @@ class KellyCalculatorWindow(QMainWindow):
 
     def _read_inputs_and_fill_missing_column(self) -> list[OutcomeInput]:
         labels = self.generated_outcome_labels()
-        probability_texts = [field.text().strip() for field in self.probability_inputs]
         weight_texts = [field.text().strip() for field in self.weight_inputs]
-        probability_complete = all(probability_texts)
+        payout_texts = [field.text().strip() for field in self.payout_inputs]
         weight_complete = all(weight_texts)
+        payout_complete = all(payout_texts)
 
-        if any(probability_texts) and not probability_complete:
-            raise ValueError(
-                "Enter all 3 probabilities, or leave probability column empty and enter all 3 weights."
-            )
-        if any(weight_texts) and not weight_complete:
-            raise ValueError(
-                "Enter all 3 weights, or leave weight column empty and enter all 3 probabilities."
-            )
-        if not probability_complete and not weight_complete:
-            raise ValueError("Enter either all 3 probabilities or all 3 weights.")
+        self._validate_complete_or_empty(weight_texts, weight_complete, "weight")
+        self._validate_complete_or_empty(payout_texts, payout_complete, "payout")
+        if not weight_complete and not payout_complete:
+            raise ValueError("Enter all 3 weights or all 3 predicted payouts.")
 
-        if probability_complete and weight_complete:
-            probabilities = self._parse_probability_inputs(labels)
-            probabilities_from_weights = normalize_weights(
-                self._parse_weight_inputs(labels)
-            )
-            if not probabilities_match(probabilities, probabilities_from_weights):
-                raise ValueError(
-                    "Probability and weight columns disagree. Clear one column, then Calculate again."
-                )
-        elif probability_complete:
-            probabilities = self._parse_probability_inputs(labels)
-            self._fill_weights(probabilities)
-        else:
+        if weight_complete:
             probabilities = normalize_weights(self._parse_weight_inputs(labels))
-            self._fill_probabilities(probabilities)
+        else:
+            probabilities = normalize_payouts(self._parse_payout_inputs(labels))
+
+        if weight_complete and payout_complete:
+            probabilities_from_payouts = normalize_payouts(
+                self._parse_payout_inputs(labels)
+            )
+            if not probabilities_match(probabilities, probabilities_from_payouts):
+                raise ValueError(
+                    "Predicted weight and payout columns disagree. "
+                    "Clear one column, then Calculate again."
+                )
+
+        if not weight_complete:
+            self._fill_weights(probabilities)
+        if not payout_complete:
+            self._fill_payouts(probabilities)
 
         inputs: list[OutcomeInput] = []
         for row, label in enumerate(labels):
@@ -302,15 +300,13 @@ class KellyCalculatorWindow(QMainWindow):
             inputs.append(OutcomeInput(label, probabilities[row], odds))
         return inputs
 
-    def _parse_probability_inputs(self, labels: tuple[str, str, str]) -> list[float]:
-        probabilities = [
-            parse_probability_percent(
-                self.probability_inputs[row].text(), f"{label} probability"
+    def _validate_complete_or_empty(
+        self, texts: list[str], complete: bool, column_name: str
+    ) -> None:
+        if any(texts) and not complete:
+            raise ValueError(
+                f"Enter all 3 {column_name}s, or leave the {column_name} column empty."
             )
-            for row, label in enumerate(labels)
-        ]
-        validate_probability_total(probabilities)
-        return probabilities
 
     def _parse_weight_inputs(self, labels: tuple[str, str, str]) -> list[float]:
         return [
@@ -318,13 +314,20 @@ class KellyCalculatorWindow(QMainWindow):
             for row, label in enumerate(labels)
         ]
 
-    def _fill_probabilities(self, probabilities: list[float]) -> None:
-        for row, probability in enumerate(probabilities):
-            self.probability_inputs[row].setText(format_percent(probability))
+    def _parse_payout_inputs(self, labels: tuple[str, str, str]) -> list[float]:
+        return [
+            parse_predicted_payout(self.payout_inputs[row].text(), f"{label} payout")
+            for row, label in enumerate(labels)
+        ]
 
     def _fill_weights(self, probabilities: list[float]) -> None:
         for row, probability in enumerate(probabilities):
             self.weight_inputs[row].setText(format_weight(probability * 100))
+
+    def _fill_payouts(self, probabilities: list[float]) -> None:
+        payouts = probabilities_to_payouts(probabilities)
+        for row, payout in enumerate(payouts):
+            self.payout_inputs[row].setText(format_payout(payout))
 
     def _set_output(
         self, row: int, full_kelly: str, half_kelly: str, quarter_kelly: str
@@ -368,31 +371,6 @@ def calculate_outcomes(inputs: list[OutcomeInput]) -> list[OutcomeResult]:
     return results
 
 
-def parse_probability_percent(raw_value: str, field_name: str) -> float:
-    """Parse probability percent input."""
-    text = raw_value.strip()
-    if not text:
-        raise ValueError(f"{field_name} is required.")
-    if text.endswith("%"):
-        text = text[:-1].strip()
-
-    try:
-        value = float(text)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be a percentage number.") from exc
-
-    if not 0 <= value <= 100:
-        raise ValueError(f"{field_name} must be between 0% and 100%.")
-    return value / 100
-
-
-def validate_probability_total(probabilities: list[float]) -> None:
-    """Ensure probability percentages add to 100%."""
-    total_percent = sum(probabilities) * 100
-    if abs(total_percent - 100) > PROBABILITY_SUM_TOLERANCE:
-        raise ValueError(f"Probabilities must add to 100%, got {total_percent:.6g}%.")
-
-
 def parse_weight(raw_value: str, field_name: str) -> float:
     """Parse non-negative outcome weight."""
     text = raw_value.strip()
@@ -415,6 +393,36 @@ def normalize_weights(weights: list[float]) -> list[float]:
     if total <= 0:
         raise ValueError("Weights must sum to more than 0.")
     return [weight / total for weight in weights]
+
+
+def parse_predicted_payout(raw_value: str, field_name: str) -> float:
+    """Parse positive predicted payout."""
+    text = raw_value.strip()
+    if not text:
+        raise ValueError(f"{field_name} is required.")
+
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a number.") from exc
+
+    if value <= 0:
+        raise ValueError(f"{field_name} must be greater than 0.")
+    return value
+
+
+def normalize_payouts(payouts: list[float]) -> list[float]:
+    """Convert inverse-proportional payouts into probabilities."""
+    return normalize_weights([1 / payout for payout in payouts])
+
+
+def probabilities_to_payouts(probabilities: list[float]) -> list[float]:
+    """Convert probabilities into inverse-proportional predicted payouts."""
+    if any(probability <= 0 for probability in probabilities):
+        raise ValueError(
+            "Predicted payouts cannot be calculated from zero probabilities."
+        )
+    return [1 / probability for probability in probabilities]
 
 
 def probabilities_match(left: list[float], right: list[float]) -> bool:
@@ -464,6 +472,11 @@ def format_percent(value: float) -> str:
 
 def format_weight(value: float) -> str:
     """Format generated weight text."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def format_payout(value: float) -> str:
+    """Format generated payout text."""
     return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
